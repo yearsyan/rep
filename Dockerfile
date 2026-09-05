@@ -12,8 +12,12 @@ RUN mkdir src && echo 'fn main() {}' > src/main.rs \
  && rm -rf src target/release/rep
 
 COPY src ./src
-RUN cargo build --release --locked \
- && cp target/release/rep /usr/local/bin/rep
+# COPY 保留源文件的旧 mtime,cargo 会误判无需重编、把上面的占位二进制留在产物里;
+# touch 把 mtime 推到指纹之后,强制重新编译本包(依赖仍走缓存)
+RUN find src -type f -name '*.rs' -exec touch {} + \
+ && cargo build --release --locked \
+ && cp target/release/rep /usr/local/bin/rep \
+ && /usr/local/bin/rep --version | grep -q '^rep '  # 防止占位空二进制混进产物(它对任意参数都静默退出 0)
 
 # ---- 运行阶段 ----
 FROM debian:bookworm-slim AS runtime
