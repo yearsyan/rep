@@ -9,7 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use time::{Duration as TimeDuration, OffsetDateTime};
 
-use crate::config::{ClientConfig, ServerConfig};
+use crate::config::{ClientConfig, ProxyConfig, ServerConfig, validate_client_name};
 
 const CA_VALIDITY_DAYS: i64 = 3650;
 const LEAF_VALIDITY_DAYS: i64 = 1095;
@@ -20,19 +20,6 @@ fn set_validity(params: &mut CertificateParams, days: i64) {
     let end = now + TimeDuration::days(days);
     params.not_before = rcgen::date_time_ymd(begin.year(), u8::from(begin.month()), begin.day());
     params.not_after = rcgen::date_time_ymd(end.year(), u8::from(end.month()), end.day());
-}
-
-/// 客户端证书名只允许字母数字与 -_，防路径逃逸与奇怪文件名
-fn validate_name(name: &str) -> Result<()> {
-    let ok = !name.is_empty()
-        && name.len() <= 64
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if !ok {
-        bail!("invalid client name {name:?}: use 1-64 chars of [A-Za-z0-9-_]");
-    }
-    Ok(())
 }
 
 pub fn run_init(domain: &str, ips: &[String], out: &Path, force: bool) -> Result<()> {
@@ -116,7 +103,10 @@ pub fn run_init(domain: &str, ips: &[String], out: &Path, force: bool) -> Result
     if force || !server_toml.exists() {
         fs::write(
             &server_toml,
-            toml::to_string_pretty(&ServerConfig::default())?,
+            toml::to_string_pretty(&ServerConfig {
+                proxies: vec![ProxyConfig::default()],
+                ..Default::default()
+            })?,
         )?;
         println!("wrote {}", server_toml.display());
     } else {
@@ -147,7 +137,7 @@ pub fn run_init(domain: &str, ips: &[String], out: &Path, force: bool) -> Result
 }
 
 pub fn run_issue_client(name: &str, config: &Path, force: bool) -> Result<()> {
-    validate_name(name)?;
+    validate_client_name(name)?;
     let cfg = crate::config::load_server_config(config)?;
     let ca_path = PathBuf::from(&cfg.tunnel.tls.ca);
     let ca_key_path = ca_path.with_extension("key");

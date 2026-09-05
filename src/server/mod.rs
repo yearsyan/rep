@@ -2,7 +2,8 @@ pub mod proxy;
 mod request_body;
 pub mod tunnel;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -49,7 +50,7 @@ impl Shutdown {
     }
 }
 
-/// 持有当前隧道会话；新会话接入时替换并向旧会话发关闭信号（而非 abort，
+/// 持有一个证书身份的当前隧道会话；同身份新会话接入时替换并向旧会话发关闭信号（而非 abort，
 /// 保证旧 driver 能走完尾部清理）。
 #[derive(Default)]
 pub struct Registry {
@@ -90,18 +91,17 @@ impl Registry {
 }
 
 pub async fn run(cfg: ServerConfig) -> Result<()> {
+    let proxies = cfg.proxy_configs()?;
     let tunnel_tls = crate::tls::server_config(
         cfg.tunnel.tls.ca.as_ref(),
         cfg.tunnel.tls.cert.as_ref(),
         cfg.tunnel.tls.key.as_ref(),
     )?;
 
-    let registry = Arc::new(Registry::new());
-
     let tunnel_listener = TcpListener::bind(&cfg.tunnel.listen).await?;
     info!("tunnel listening on {} (mTLS + h2)", cfg.tunnel.listen);
 
-    let proxy_tls = if cfg.proxy.tls {
+    let proxy_tls = if proxies.iter().any(|proxy| proxy.tls) {
         Some(TlsAcceptor::from(crate::tls::proxy_tls_config(
             cfg.tunnel.tls.cert.as_ref(),
             cfg.tunnel.tls.key.as_ref(),
@@ -109,18 +109,34 @@ pub async fn run(cfg: ServerConfig) -> Result<()> {
     } else {
         None
     };
-    let proxy_listener = TcpListener::bind(&cfg.proxy.listen).await?;
-    info!(
-        "proxy listening on {} (tls={}, max_connections={})",
-        cfg.proxy.listen, cfg.proxy.tls, cfg.proxy.max_connections,
-    );
-
-    let a = tunnel::accept_loop(
+    let mut routes = HashMap::new();
+    let mut listeners = Vec::new();
+    // 所有端口绑定成功后再启动任务，避免配置错误时只启动部分代理。
+    for proxy in proxies {
+        let listener = TcpListener::bind(&proxy.listen)
+            .await
+            .with_context(|| format!("binding proxy {} for {}", proxy.listen, proxy.client_name))?;
+        let registry = Arc::new(Registry::new());
+        routes.insert(proxy.client_name.clone(), registry.clone());
+        info!(
+            "proxy listening on {} (client_name={}, tls={}, max_connections={})",
+            proxy.listen, proxy.client_name, proxy.tls, proxy.max_connections,
+        );
+        listeners.push((listener, registry, proxy));
+    }
+    let mut tasks = tokio::task::JoinSet::new();
+    tasks.spawn(tunnel::accept_loop(
         tunnel_listener,
         TlsAcceptor::from(tunnel_tls),
-        registry.clone(),
-    );
-    let b = proxy::run(proxy_listener, proxy_tls, registry, cfg.proxy);
-    tokio::try_join!(a, b)?;
+        Arc::new(routes),
+    ));
+    for (listener, registry, proxy) in listeners {
+        let tls = if proxy.tls { proxy_tls.clone() } else { None };
+        tasks.spawn(proxy::run(listener, tls, registry, proxy));
+    }
+    // 任一监听任务退出就结束服务；JoinSet 析构会关闭其他监听任务。
+    if let Some(result) = tasks.join_next().await {
+        result.context("server listener task failed")??;
+    }
     Ok(())
 }

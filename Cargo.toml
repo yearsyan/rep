@@ -1,6 +1,6 @@
 [package]
 name = "rep"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -22,6 +22,14 @@ tokio-util = { version = "0.7", features = ["time"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+x509-parser = "0.16"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
+
+# 减小二进制体积:strip 调试符号;thin LTO + 单 codegen unit 跨 crate 优化
+# 不用 panic="abort"(代理进程需保持任务级 panic 隔离)与 opt-level="z"(吞吐优先)
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

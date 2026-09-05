@@ -271,7 +271,7 @@ async fn channel_deadline_manager(
 pub async fn accept_loop(
     listener: TcpListener,
     tls: TlsAcceptor,
-    registry: Arc<Registry>,
+    routes: Arc<HashMap<String, Arc<Registry>>>,
 ) -> Result<()> {
     let handshakes = Arc::new(Semaphore::new(MAX_TUNNEL_HANDSHAKES));
     loop {
@@ -289,7 +289,7 @@ pub async fn accept_loop(
             }
         };
         let tls = tls.clone();
-        let registry = registry.clone();
+        let routes = routes.clone();
         tokio::spawn(async move {
             let stream = match tokio::time::timeout(HANDSHAKE_TIMEOUT, tls.accept(tcp)).await {
                 Ok(Ok(s)) => s,
@@ -307,6 +307,25 @@ pub async fn accept_loop(
                 warn!(?peer, "rejecting tunnel connection with alpn {alpn:?}");
                 return;
             }
+            let identity = stream
+                .get_ref()
+                .1
+                .peer_certificates()
+                .and_then(|certs| certs.first())
+                .ok_or_else(|| anyhow::anyhow!("missing client certificate"))
+                .and_then(crate::tls::client_identity);
+            let identity = match identity {
+                Ok(identity) => identity,
+                Err(e) => {
+                    warn!(?peer, "rejecting tunnel client identity: {e:#}");
+                    return;
+                }
+            };
+            let Some(registry) = routes.get(&identity).cloned() else {
+                warn!(?peer, client_name = %identity, "rejecting unconfigured tunnel client");
+                return;
+            };
+            info!(?peer, client_name = %identity, "tunnel client authenticated");
             if let Err(e) = start_session(stream, registry).await {
                 warn!(?peer, "tunnel session setup failed: {e:#}");
             }
@@ -682,6 +701,34 @@ pub fn normalize_target_host(host: &str) -> String {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, duplex};
+
+    #[test]
+    fn identity_registries_isolate_replacement_and_stale_cleanup() {
+        let session = || {
+            let (tx, rx) = mpsc::channel(64);
+            Arc::new(SessionState::new(tx, rx).0)
+        };
+        let a = Registry::new();
+        let b = Registry::new();
+        let old_a = session();
+        let current_b = session();
+        a.register(old_a.clone());
+        b.register(current_b.clone());
+        let new_a = session();
+        a.register(new_a.clone());
+        assert!(old_a.shutdown().is_signaled());
+        assert!(!current_b.shutdown().is_signaled());
+        a.clear_if_current(&old_a);
+        assert!(Arc::ptr_eq(&a.current().unwrap(), &new_a));
+        assert!(Arc::ptr_eq(&b.current().unwrap(), &current_b));
+        let dead_a = session();
+        dead_a.shutdown().signal();
+        a.register(dead_a);
+        assert!(Arc::ptr_eq(&a.current().unwrap(), &new_a));
+        a.clear_if_current(&new_a);
+        assert!(a.current().is_none());
+        assert!(b.current().is_some());
+    }
 
     #[tokio::test]
     async fn deadline_manager_expires_and_cancels_entries() {
