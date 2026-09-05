@@ -1,0 +1,63 @@
+name: Build and publish Linux binaries
+
+on:
+  push:
+    tags:
+      - '**' # 仅在推送 tag 时构建并上传
+
+permissions:
+  contents: write # 创建 Release 需要
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, arch: amd64, target: x86_64-unknown-linux-musl }
+          - { runner: ubuntu-24.04-arm, arch: arm64, target: aarch64-unknown-linux-musl }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          # tag 中的 '/' 不能出现在文件名里,替换为 '-'
+          TAG="$(echo '${{ github.ref_name }}' | sed 's|/|-|g')"
+          PKG="rep-${TAG}-linux-${{ matrix.arch }}.tar.gz"
+          tar -C "target/${{ matrix.target }}/release" -czf "$PKG" rep
+          sha256sum "$PKG" > "$PKG.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rep-linux-${{ matrix.arch }}
+          path: rep-*.tar.gz*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+          gh release upload "$TAG" *.tar.gz *.tar.gz.sha256 --clobber --repo "$GITHUB_REPOSITORY"

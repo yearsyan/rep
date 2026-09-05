@@ -13,6 +13,7 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser)]
 #[command(
     name = "rep",
+    version,
     about = "HTTP/2 反向隧道代理：无公网客户端借公网服务端暴露 HTTP 代理出口"
 )]
 struct Cli {
