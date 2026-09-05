@@ -1,0 +1,6 @@
+/target
+/testenv
+/certs
+/.zcode
+*.log
+*.key

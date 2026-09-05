@@ -1,0 +1,10 @@
+.git
+.github
+.zcode
+target
+testenv
+certs
+Dockerfile
+.dockerignore
+*.log
+*.key
