@@ -273,6 +273,8 @@ mod tests {
         assert_eq!(inline, pem);
         let mut path = String::from("certs/ca.pem");
         resolve_path(base, &mut path);
-        assert_eq!(path, "/etc/rep/certs/ca.pem");
+        // 期望值按平台路径规则拼接(Windows 分隔符为反斜杠)
+        let joined = base.join("certs/ca.pem");
+        assert_eq!(path, joined.to_string_lossy());
     }
 }
