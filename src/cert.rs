@@ -5,7 +5,6 @@ use rcgen::{
 };
 use std::fs;
 use std::net::IpAddr;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use time::{Duration as TimeDuration, OffsetDateTime};
 
@@ -139,6 +138,9 @@ pub fn run_init(domain: &str, ips: &[String], out: &Path, force: bool) -> Result
 pub fn run_issue_client(name: &str, config: &Path, force: bool) -> Result<()> {
     validate_client_name(name)?;
     let cfg = crate::config::load_server_config(config)?;
+    if crate::config::is_inline_pem(&cfg.tunnel.tls.ca) {
+        bail!("[tunnel.tls] ca is inline PEM; cert issue-client needs a CA file path to locate the CA key");
+    }
     let ca_path = PathBuf::from(&cfg.tunnel.tls.ca);
     let ca_key_path = ca_path.with_extension("key");
     let dir = ca_path
@@ -187,6 +189,13 @@ fn write_cert(path: &Path, pem: &str) -> Result<()> {
 
 fn write_key(path: &Path, pem: &str) -> Result<()> {
     fs::write(path, pem).with_context(|| format!("writing {}", path.display()))?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("chmod {}", path.display()))
+    // 私钥收紧为属主读写;Windows 无对应可移植 API,接受默认权限
+    // (依赖 NTFS 所在目录的 ACL,必要时用户自行收紧)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("chmod {}", path.display()))?;
+    }
+    Ok(())
 }

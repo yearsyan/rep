@@ -175,15 +175,21 @@ pub fn load_server_config(path: &Path) -> Result<ServerConfig> {
 
 pub fn load_client_config(path: &Path) -> Result<ClientConfig> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut cfg: ClientConfig =
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    if cfg.server_name.is_empty() {
-        cfg.server_name = host_of(&cfg.server_addr).into();
-    }
+    let mut cfg = parse_client_config(&text)
+        .with_context(|| format!("parsing {}", path.display()))?;
     let base = config_dir(path);
     resolve_path(&base, &mut cfg.ca);
     resolve_path(&base, &mut cfg.cert);
     resolve_path(&base, &mut cfg.key);
+    Ok(cfg)
+}
+
+/// 解析客户端配置文本(server_name 缺省取 server_addr 的主机部分);内嵌配置也走这里。
+pub fn parse_client_config(text: &str) -> Result<ClientConfig> {
+    let mut cfg: ClientConfig = toml::from_str(text).context("parsing client config")?;
+    if cfg.server_name.is_empty() {
+        cfg.server_name = host_of(&cfg.server_addr).into();
+    }
     Ok(cfg)
 }
 
@@ -196,12 +202,21 @@ fn config_dir(path: &Path) -> PathBuf {
 
 // 配置里的相对路径按配置文件所在目录解析
 fn resolve_path(base: &Path, p: &mut String) {
+    // 内嵌 PEM 原样保留,优先于按路径解析
+    if is_inline_pem(p) {
+        return;
+    }
     if !Path::new(p).is_absolute() {
         *p = base.join(&*p).to_string_lossy().into_owned();
     }
 }
 
-fn host_of(addr: &str) -> &str {
+/// 证书配置值以 -----BEGIN 开头视为内嵌 PEM 内容,否则视为文件路径。
+pub fn is_inline_pem(value: &str) -> bool {
+    value.trim_start().starts_with("-----BEGIN ")
+}
+
+pub(crate) fn host_of(addr: &str) -> &str {
     if let Some(rest) = addr.strip_prefix('[') {
         return rest.split(']').next().unwrap_or(addr);
     }
@@ -243,5 +258,21 @@ mod tests {
             let cfg: ServerConfig = toml::from_str(config).unwrap();
             assert!(cfg.proxy_configs().is_err(), "accepted: {config}");
         }
+    }
+
+    #[test]
+    fn inline_pem_values_skip_path_resolution() {
+        let pem = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----";
+        assert!(is_inline_pem(pem));
+        assert!(is_inline_pem(" \n -----BEGIN PRIVATE KEY-----"));
+        assert!(!is_inline_pem("certs/ca.pem"));
+        assert!(!is_inline_pem(""));
+        let base = Path::new("/etc/rep");
+        let mut inline = pem.to_string();
+        resolve_path(base, &mut inline);
+        assert_eq!(inline, pem);
+        let mut path = String::from("certs/ca.pem");
+        resolve_path(base, &mut path);
+        assert_eq!(path, "/etc/rep/certs/ca.pem");
     }
 }

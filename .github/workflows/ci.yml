@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        runs-on: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Smoke
+        run: cargo run --release --locked -- --version
+
+      - name: Clippy
+        if: matrix.runs-on == 'ubuntu-latest'
+        run: cargo clippy --locked --all-targets -- -D warnings
