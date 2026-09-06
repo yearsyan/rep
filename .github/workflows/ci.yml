@@ -45,13 +45,13 @@ jobs:
       - name: Install NDK
         run: |
           curl -fsSL -o /tmp/ndk.zip "https://dl.google.com/android/repository/${NDK}-linux.zip"
-          unzip -q /tmp/ndk.zip -d "$HOME"
+          sudo unzip -q /tmp/ndk.zip -d /opt
 
       - name: Build
         env:
-          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: $HOME/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-          CC_aarch64_linux_android: $HOME/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-          AR_aarch64_linux_android: $HOME/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: /opt/${{ env.NDK }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CC_aarch64_linux_android: /opt/${{ env.NDK }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          AR_aarch64_linux_android: /opt/${{ env.NDK }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
         run: cargo build --release --locked --target $TARGET
 
       - name: Smoke
