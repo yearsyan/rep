@@ -61,5 +61,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rep-android-aarch64
-          path: target/${TARGET}/release/rep
+          path: target/${{ env.TARGET }}/release/rep
           if-no-files-found: error
