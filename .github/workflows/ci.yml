@@ -28,3 +28,38 @@ jobs:
       - name: Clippy
         if: matrix.runs-on == 'ubuntu-latest'
         run: cargo clippy --locked --all-targets -- -D warnings
+
+  # 交叉编译 Android 单 ELF(adb shell 可执行,动态链接 bionic)
+  build-android:
+    runs-on: ubuntu-latest
+    env:
+      NDK: android-ndk-r27c
+      TARGET: aarch64-linux-android
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Add Rust target
+        run: rustup target add $TARGET
+
+      - name: Install NDK
+        run: |
+          curl -fsSL -o /tmp/ndk.zip "https://dl.google.com/android/repository/${NDK}-linux.zip"
+          unzip -q /tmp/ndk.zip -d "$HOME"
+
+      - name: Build
+        env:
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: $HOME/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          CC_aarch64_linux_android: $HOME/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          AR_aarch64_linux_android: $HOME/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+        run: cargo build --release --locked --target $TARGET
+
+      - name: Smoke
+        run: file target/${TARGET}/release/rep | grep -q 'ELF 64-bit LSB.*ARM aarch64'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rep-android-aarch64
+          path: target/${TARGET}/release/rep
+          if-no-files-found: error
